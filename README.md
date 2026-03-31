@@ -2,6 +2,79 @@
 
 A comprehensive, line-by-line technical analysis of [nirholas/claude-code](https://github.com/nirholas/claude-code) — the publicly available source code of Anthropic's Claude Code CLI. From the moment you type `claude` in your terminal to the final response — every function call, every design decision, every architectural pattern documented.
 
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant R as REPL
+    participant QG as QueryGuard
+    participant CTX as Context (memoized)
+    participant Q as queryLoop()
+    participant API as Anthropic API
+    participant STE as StreamingToolExecutor
+    participant T as Tool (Read/Edit/Bash)
+    participant INK as Ink Terminal
+
+    U->>R: Enter (sends message)
+    R->>R: onSubmit() — slash command? empty?
+    R->>R: processUserInput() — String → Message[]
+    R->>QG: tryStart()
+    
+    alt Busy
+        QG-->>R: null → enqueue
+    else Available
+        QG-->>R: generation (OK)
+    end
+
+    R->>CTX: Promise.all([systemPrompt, userContext, systemContext])
+    CTX-->>R: Memoized results (computed on first query)
+
+    rect rgb(66, 133, 244)
+        Note over Q,API: while(true) — Agentic Loop
+
+        R->>Q: query({ messages, systemPrompt, tools })
+        Q->>Q: Compaction: snip → micro → collapse → auto
+        Q->>API: HTTP POST (stream: true, 50+ tool, thinking)
+    end
+
+    rect rgb(52, 168, 83)
+        Note over API,INK: Streaming — Tokens flow
+
+        loop Token stream
+            API-->>Q: thinking/text/tool_use chunk
+            Q-->>R: yield event
+            R-->>INK: setMessages → re-render
+            INK-->>U: Terminal updates
+        end
+    end
+
+    rect rgb(234, 67, 53)
+        Note over STE,T: Tool Execution — Starts while model is writing
+
+        opt If model sent tool_use
+            Q->>STE: addTool(block) — start immediately
+            STE->>STE: canUseTool() — permission check
+            STE->>T: tool.call(input)
+            T-->>STE: tool_result
+            STE-->>Q: yield result
+            Q-->>R: yield → update terminal
+            Q->>Q: needsFollowUp=true → continue (go back to start)
+        end
+    end
+
+    rect rgb(251, 188, 4)
+        Note over Q,R: Decision — Continue or stop?
+
+        opt If model only sent text
+            Q->>Q: needsFollowUp=false
+            Q-->>R: return stop_sequence
+        end
+    end
+
+    R->>QG: end(generation) → idle
+    R-->>U: Prompt active — new message can be typed
+```
+
+
 ## What is this?
 
 Claude Code is Anthropic's official CLI tool for interacting with Claude — a 512K+ line TypeScript codebase. This repository dissects its internals:
